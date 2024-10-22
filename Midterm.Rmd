@@ -1,0 +1,164 @@
+---
+title: "Midterm"
+author: "EKB"
+date: "2024-10-15"
+output: html_document
+---
+
+# load packages
+```{r}
+library(tidyverse)
+library(gganimate)
+```
+
+# import original data
+```{r}
+data = read_csv("collection-main//Artworks.csv", col_types = list(`Circumference (cm)` = "d", `Seat Height (cm)` = "d"))
+```
+
+# clean up nationality data
+```{r}
+# drop rows with no nationality value, separate nationalities, drop rows with more than one artist, remove parentheses
+data2 = data%>%filter(Nationality!="()")%>%
+  mutate(Nationality2 = Nationality)%>%
+  separate(Nationality2, into=c("n1", "n2"), sep="\\) \\(")%>%
+  filter(is.na(n2)==T)%>%
+  mutate(Nationality=trimws(gsub("\\(|\\)", "", Nationality)))
+
+# select just nationality and date acquired, convert date acquired to year acquired
+nat_dat = select(data2, c("Nationality","DateAcquired"))%>%
+  mutate(Year=format(as.Date(DateAcquired), "%Y"))
+```
+
+# map nationalities to country names 
+```{r}
+# load country names csv
+country_names = read_csv("countries.csv")%>%select(c("Nationality", "Name"))
+
+# delete some duplicates
+names = c("U.S. Minor Outlying Islands","Northern Mariana Islands","Netherlands Antilles",
+          "British Antarctic Territory","Saint Pierre and Miquelon","Réunion","Mayotte",
+          "Martinique","French Southern Territories","British Indian Ocean Territory",
+          "Vatican City","Svalbard and Jan Mayen","Congo - Kinshasa","Åland Islands",
+          "South Korea", "North Korea","Hong Kong SAR China","Macau SAR China")
+country_names = country_names%>%filter(!(Name %in% names))
+
+# fix some duplicates
+country_names = country_names%>%
+  mutate(Name = gsub("Congo - Brazzaville","Congo", Name))%>%
+  mutate(Nationality = ifelse(Name=='Niger',gsub("Nigerian","Nigerien",Nationality),Nationality))
+
+# add missing nationalities 
+new_nats=c("Argentine","Bosnian",
+              "Burkinabé","Canadian Inuit",
+              "Caribbean","Catalan","Coptic",
+              "Czechoslovakian","Ecuadorian","Icelandic",
+              "Korean","Native American","Nepali",
+              "Oneida","Persian","Scottish",
+              "Slovenian","Trinidad and Tobagonian",
+              "Welsh","Yugoslav")
+new_names=c("Argentina","Bosnia and Herzegovina",
+            "Burkina Faso","Canada","Puerto Rico",
+            "Spain","Egyptian", "Czech Republic",
+            "Ecuador","Iceland","Korea","United States",
+            "Nepal","United States","Iran","United Kingdom",
+            "Slovenia","Trinidad and Tobago","United Kingdom",
+            "Serbia and Montenegro")
+new_country_names = data.frame(Nationality=new_nats, Name=new_names)
+country_names = rbind(country_names, new_country_names)
+
+# merge with art nationality original data
+nat_dat = left_join(nat_dat, country_names, by="Nationality")
+
+# drop 893 Nationality Unknown 
+nat_dat = nat_dat%>%filter(Nationality!="Nationality unknown")
+```
+# load map data 
+```{r}
+# map data
+world = map_data("world")
+
+# rename south korea and north korea to korea to match with art data
+world = world%>%mutate(region = ifelse(grepl("Korea",region), 
+                       "Korea",
+                       region))
+```
+
+# graph 1 = map of total artworks by country of nationality 
+```{r}
+# data for first graph total nationalities 
+graph1 = nat_dat%>%group_by(Name)%>%summarize(artworks = n())
+
+
+# join map data to graph1
+graph1 = graph1%>%rename(region=Name)
+graph1 = mutate(graph1, region=recode(region, "United States"="USA"))
+nat_map = full_join(graph1, world, by="region")
+
+# make plot
+plot1 = ggplot(nat_map, aes(x=long, y=lat, group=group, fill=artworks))+
+  geom_polygon(color="black")+
+  coord_quickmap()+
+  scale_fill_gradient(low="#c9b1fc", high="#2b0182", trans=scales::log_trans(base = 10), name="Number of Artworks",na.value="white")+
+  geom_label(data=distinct(
+    filter(nat_map, region %in% c("France")), 
+    region, .keep_all=T), aes(label=region), alpha=.7, position = position_nudge(x=-25, y=10), color="white", size=3.5)+
+  geom_label(data=distinct(
+    filter(nat_map, region %in% c("USA")), 
+    region, .keep_all=T), aes(label=region), alpha=.7, position = position_nudge(x=55,y=20), color="white", size=3.5)+
+  geom_label(data=distinct(
+    filter(nat_map, region %in% c("Ghana")), 
+    region, .keep_all=T), aes(label=region), alpha=.7, position = position_nudge(x=-10,y=-15), color="white", size=3.5)+
+  geom_label(data=distinct(
+    filter(nat_map, region %in% c("Russia")), 
+    region, .keep_all=T), aes(label=region), alpha=.7, position = position_nudge(x=-50,y=20), color="white", size=3.5)+
+  geom_label(data=distinct(
+    filter(nat_map, region %in% c("Tanzania")), 
+    region, .keep_all=T), aes(label=region), alpha=.7, position = position_nudge(x=29), color="white", size=3.5)+
+  theme_void()+
+  labs(title="Total Artworks per Nationality of Artist", caption="Museum of Modern Art Collection data, 2024")+
+  theme(plot.title.position="plot", plot.caption.position="plot", plot.caption=element_text(hjust=0))
+
+# display plot
+plot1
+```
+```{r}
+# export plot
+ggsave("total_artworks_map.png",plot1, width=7, height=4, dpi=300)
+```
+
+
+# graph 2 - animated line graph of artworks by nationality over acquisition time
+```{r}
+# top 15 countries of artist nationality 
+top15 = c("United States", "France","Germany","United Kingdom","Spain",
+                       "Italy","Japan","Russia","Switzerland","Netherlands",
+                       "Mexico","Belgium","Austria","Argentina","Brazil")
+
+# data for animated graph = total artworks by year 
+graph2 = nat_dat%>%group_by(Year,Name)%>%summarize(artworks = n())%>%
+  mutate(Year = as.numeric(Year))
+graph2 = na.omit(graph2)
+graph2 = graph2%>%rename(`Country of Nationality`=Name)
+graph2 = graph2%>%group_by(`Country of Nationality`)%>%mutate(cumulative_artworks = cumsum(artworks))%>%
+  filter(`Country of Nationality` %in% top15)
+
+# make plot
+plot3 = ggplot(graph2, aes(x=Year, y=cumulative_artworks, group=`Country of Nationality`, color=`Country of Nationality`))+
+  geom_line()+geom_point()+
+  labs(title="Total Artworks per Nationality of Artist over Acquisition Time", y="Total Artworks",
+       caption="Museum of Modern Art Collection data, 2024")+
+  theme_bw()+
+  theme(plot.title.position="plot", plot.caption.position="plot", plot.caption=element_text(hjust=0))+
+  transition_reveal(Year)
+
+# animate plot
+animate(plot3, height = 4.5, width = 7, units = "in", res = 150)
+```
+```{r}
+# export plot
+anim_save("artworks_animated.gif")
+```
+
+
+
